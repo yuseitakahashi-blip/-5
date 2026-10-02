@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <base target="_top">
+  <style>
+    body { font-family: "Segoe UI", "Meiryo", sans-serif; max-width: 640px; margin: 16px auto; color: #222; }
+    .harness { background: #fff8e1; border: 1px solid #e0c674; padding: 8px 12px; margin-bottom: 16px; font-size: 13px; }
+    .harness label { margin-right: 6px; }
+    .box { border: 1px solid #999; padding: 12px 16px; margin-bottom: 16px; }
+    h2 { font-size: 16px; margin: 0 0 8px 0; }
+    .row { margin: 8px 0; }
+    .label { display: inline-block; width: 100px; color: #555; vertical-align: top; }
+    select, input[type="date"], input[type="text"] { padding: 4px; font-size: 13px; }
+    .message { padding: 8px 12px; margin-bottom: 12px; font-weight: bold; border-radius: 4px; display: none; }
+    .message.success { background: #e8f5e9; color: #1b5e20; border: 1px solid #1b5e20; display: block; }
+    .message.error { background: #fdecea; color: #b71c1c; border: 1px solid #b71c1c; display: block; }
+    button { padding: 6px 16px; cursor: pointer; }
+    button:disabled { cursor: not-allowed; opacity: 0.6; }
+    table { border-collapse: collapse; width: 100%; font-size: 12.5px; margin-top: 4px; }
+    th, td { border: 1px solid #ccc; padding: 4px 8px; text-align: left; }
+    th { background: #f2f2f2; }
+    .status-AVAILABLE { color: #1b5e20; font-weight: bold; }
+    .status-LENT { color: #b71c1c; font-weight: bold; }
+    .status-REPAIR { color: #8a6d00; font-weight: bold; }
+    .status-DISPOSED { color: #777; font-weight: bold; }
+    .hint { font-size: 12px; color: #666; margin-top: 6px; }
+    .scope-note { font-size: 12px; color: #555; background: #eef3fb; border: 1px solid #cdd9ec; padding: 8px 12px; margin-bottom: 16px; }
+  </style>
+</head>
+<body>
+
+  <div class="harness">
+    <strong>［テスト用・実際の機能ではありません］</strong><br>
+    <label>申請者:</label>
+    <select id="userSelect"></select>
+  </div>
+
+  <div class="scope-note">
+    このデモは Gate5 の例外系のうち、<strong>①在庫・状態（二重貸出防止）／②人の状態（退職・休職）／③重複・多重／⑦失敗時（トランザクション化）</strong>の4カテゴリだけを実装しています。
+    入力値チェックや返却処理、不正操作対策などその他の例外系は未実装です。
+  </div>
+
+  <div id="message" class="message"></div>
+
+  <div class="box">
+    <h2>貸出申請</h2>
+    <div class="row">
+      <span class="label">機種</span>
+      <select id="deviceSelect"></select>
+    </div>
+    <div class="row">
+      <span class="label">返却予定日</span>
+      <input type="date" id="dueDate">
+    </div>
+    <div class="row">
+      <span class="label">利用目的</span>
+      <input type="text" id="purpose" size="30" placeholder="例：出張のため">
+      <div class="hint">「FORCE_TX_FAIL」と入力すると、devices更新失敗時のロールバック動作を確認できます。</div>
+    </div>
+    <div class="row">
+      <button id="lendBtn">貸出する</button>
+    </div>
+  </div>
+
+  <div class="box">
+    <h2>端末一覧（現在の状態）</h2>
+    <table id="deviceTable">
+      <thead><tr><th>資産番号</th><th>機種名</th><th>状態</th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+
+<script>
+  var currentUserId = '';
+
+  function showMessage(text, type) {
+    var el = document.getElementById('message');
+    el.textContent = text;
+    el.className = 'message ' + type;
+  }
+  function clearMessage() {
+    var el = document.getElementById('message');
+    el.className = 'message';
+    el.textContent = '';
+  }
+  function esc(s) {
+    var d = document.createElement('div');
+    d.textContent = s == null ? '' : String(s);
+    return d.innerHTML;
+  }
+
+  function init() {
+    google.script.run.withSuccessHandler(function (data) {
+      var userSelect = document.getElementById('userSelect');
+      data.employees.forEach(function (e) {
+        var opt = document.createElement('option');
+        opt.value = e.id;
+        opt.textContent = e.name + '（' + e.employmentStatusLabel + '）';
+        userSelect.appendChild(opt);
+      });
+      currentUserId = data.employees.length ? data.employees[0].id : '';
+      userSelect.addEventListener('change', function () { currentUserId = this.value; });
+
+      document.getElementById('dueDate').value = data.defaultDueDate;
+
+      renderDeviceOptions(data.devices);
+      renderDeviceTable(data.devices);
+    }).apiBootstrap();
+  }
+
+  function renderDeviceOptions(devices) {
+    var deviceSelect = document.getElementById('deviceSelect');
+    deviceSelect.innerHTML = '';
+    devices.forEach(function (d) {
+      var opt = document.createElement('option');
+      opt.value = d.id;
+      opt.textContent = d.assetNo + '（' + d.modelName + '／' + d.statusLabel + '）';
+      deviceSelect.appendChild(opt);
+    });
+  }
+
+  function renderDeviceTable(devices) {
+    var tbody = document.querySelector('#deviceTable tbody');
+    tbody.innerHTML = '';
+    devices.forEach(function (d) {
+      var tr = document.createElement('tr');
+      tr.innerHTML = '<td>' + esc(d.assetNo) + '</td><td>' + esc(d.modelName) + '</td>' +
+        '<td class="status-' + esc(d.status) + '">' + esc(d.statusLabel) + '</td>';
+      tbody.appendChild(tr);
+    });
+  }
+
+  function refreshDevices() {
+    google.script.run.withSuccessHandler(function (data) {
+      renderDeviceOptions(data.devices);
+      renderDeviceTable(data.devices);
+    }).apiBootstrap();
+  }
+
+  document.getElementById('lendBtn').addEventListener('click', function () {
+    var btn = this;
+    var deviceId = document.getElementById('deviceSelect').value;
+    var dueDate = document.getElementById('dueDate').value;
+    var purpose = document.getElementById('purpose').value;
+
+    clearMessage();
+    btn.disabled = true; // 連打（二重送信）防止：クライアント側の防波堤
+
+    google.script.run
+      .withSuccessHandler(function (res) {
+        btn.disabled = false;
+        showMessage(res.message, res.success ? 'success' : 'error');
+        refreshDevices();
+      })
+      .withFailureHandler(function (err) {
+        btn.disabled = false;
+        showMessage(String(err), 'error');
+      })
+      .apiLendDevice({
+        deviceId: deviceId,
+        userId: currentUserId,
+        dueDate: dueDate,
+        purpose: purpose
+      });
+  });
+
+  init();
+</script>
+</body>
+</html>
